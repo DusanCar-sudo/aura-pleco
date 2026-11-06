@@ -14,6 +14,9 @@ mkdir -p "$BIN_DIR" "$SYSTEMD_USER_DIR"
 echo "[*] Installing aura-pleco executable to $BIN_DIR/aura-pleco..."
 install -m 755 "$DIR/aura-pleco" "$BIN_DIR/aura-pleco"
 
+echo "[*] Installing aura-pleco-memlog profiler to $BIN_DIR/aura-pleco-memlog..."
+install -m 755 "$DIR/aura-pleco-memlog" "$BIN_DIR/aura-pleco-memlog"
+
 echo "[*] Installing systemd user unit to $SYSTEMD_USER_DIR/aura-pleco.service..."
 cp "$DIR/aura-pleco.service" "$SYSTEMD_USER_DIR/aura-pleco.service"
 

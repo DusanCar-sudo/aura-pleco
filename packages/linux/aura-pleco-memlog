@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""
+================================================================================
+🐟 aura-pleco-memlog: Real-time AI Model & System Memory Logger & Profiler
+================================================================================
+Monitors, logs, and profiles memory dynamics for local AI models (llama-server,
+LM Studio, Ollama, vLLM, PyTorch/Python) and operating system memory headroom.
+Zero external dependencies (uses Linux /proc directly).
+"""
+
+import os
+import sys
+import time
+import json
+import glob
+import urllib.request
+import urllib.error
+import argparse
+from datetime import datetime
+
+# ------------------------------------------------------------------------------
+# System Memory Retrieval (/proc/meminfo)
+# ------------------------------------------------------------------------------
+def get_system_memory():
+    mem = {}
+    try:
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    key = parts[0].strip()
+                    val_parts = parts[1].strip().split()
+                    val_kb = int(val_parts[0])
+                    mem[key] = val_kb // 1024  # Convert to MB
+    except Exception as e:
+        pass
+
+    total = mem.get("MemTotal", 0)
+    avail = mem.get("MemAvailable", 0)
+    free = mem.get("MemFree", 0)
+    cached = mem.get("Cached", 0)
+    buffers = mem.get("Buffers", 0)
+    dirty = mem.get("Dirty", 0)
+    swap_total = mem.get("SwapTotal", 0)
+    swap_free = mem.get("SwapFree", 0)
+    used = total - avail
+    swap_used = swap_total - swap_free
+    load_pct = round((used / total) * 100, 1) if total > 0 else 0
+
+    return {
+        "total_mb": total,
+        "avail_mb": avail,
+        "used_mb": used,
+        "free_mb": free,
+        "cached_mb": cached,
+        "buffers_mb": buffers,
+        "dirty_mb": dirty,
+        "swap_total_mb": swap_total,
+        "swap_used_mb": swap_used,
+        "load_pct": load_pct
+    }
+
+# ------------------------------------------------------------------------------
+# Process Memory Retrieval (/proc/<pid>/status & cmdline)
+# ------------------------------------------------------------------------------
+def find_model_processes():
+    targets = ["llama-server", "llmster", "ollama", "vllm", "lmstudio", "llama_cpp"]
+    procs = []
+
+    for pid_dir in glob.glob("/proc/[0-9]*"):
+        try:
+            pid = int(os.path.basename(pid_dir))
+            cmdline_file = os.path.join(pid_dir, "cmdline")
+            status_file = os.path.join(pid_dir, "status")
+
+            if not os.path.exists(status_file):
+                continue
+
+            with open(cmdline_file, "rb") as f:
+                cmd_raw = f.read().replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip()
+
+            status = {}
+            with open(status_file, "r") as f:
+                for line in f:
+                    parts = line.split(":")
+                    if len(parts) == 2:
+                        status[parts[0].strip()] = parts[1].strip()
+
+            name = status.get("Name", "")
+            is_match = False
+            model_hint = ""
+
+            for t in targets:
+                if t in name.lower() or t in cmd_raw.lower():
+                    is_match = True
+                    break
+
+            # If python process, check if running an AI/LLM model
+            if not is_match and "python" in name.lower():
+                if any(x in cmd_raw.lower() for x in ["model", "transformers", "torch", "inference", "agent", "llm", "server"]):
+                    is_match = True
+
+            if is_match:
+                # Extract model filename if present in cmdline
+                if "--model" in cmd_raw:
+                    try:
+                        m_part = cmd_raw.split("--model")[1].strip().split()[0]
+                        model_hint = os.path.basename(m_part)
+                    except:
+                        pass
+                elif "LFM" in cmd_raw or "gguf" in cmd_raw:
+                    for token in cmd_raw.split():
+                        if ".gguf" in token.lower() or "lfm" in token.lower():
+                            model_hint = os.path.basename(token)
+                            break
+
+                def parse_kb(val):
+                    try:
+                        return int(val.split()[0]) // 1024
+                    except:
+                        return 0
+
+                procs.append({
+                    "pid": pid,
+                    "name": name,
+                    "model": model_hint or name,
+                    "cmd": cmd_raw[:120] + ("..." if len(cmd_raw) > 120 else ""),
+                    "rss_mb": parse_kb(status.get("VmRSS", "0")),
+                    "vms_mb": parse_kb(status.get("VmSize", "0")),
+                    "peak_mb": parse_kb(status.get("VmHWM", "0")),
+                    "anon_mb": parse_kb(status.get("RssAnon", "0")),
+                    "file_mb": parse_kb(status.get("RssFile", "0")),
+                    "swap_mb": parse_kb(status.get("VmSwap", "0")),
+                })
+        except:
+            continue
+
+    # Sort by RSS descending
+    procs.sort(key=lambda x: x["rss_mb"], reverse=True)
+    return procs
+
+# ------------------------------------------------------------------------------
+# Snapshot View
+# ------------------------------------------------------------------------------
+def print_snapshot():
+    sys_mem = get_system_memory()
+    procs = find_model_processes()
+
+    print("================================================================================")
+    print("        🐟 AURA PLECO — LOCAL AI MODEL & SYSTEM MEMORY SNAPSHOT                 ")
+    print("================================================================================")
+    print(f"  Time:                 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  System RAM Total:     {sys_mem['total_mb']:,} MB")
+    print(f"  System RAM Available: {sys_mem['avail_mb']:,} MB  ({sys_mem['load_pct']}% Load)")
+    print(f"  System RAM Used:      {sys_mem['used_mb']:,} MB  (Free: {sys_mem['free_mb']:,} MB)")
+    print(f"  Kernel Page Cache:    {sys_mem['cached_mb']:,} MB  (Dirty: {sys_mem['dirty_mb']:,} MB)")
+    print(f"  Swap Used:            {sys_mem['swap_used_mb']:,} MB / {sys_mem['swap_total_mb']:,} MB")
+    print("--------------------------------------------------------------------------------")
+    print(f"  Active AI / Local Model Processes Found: {len(procs)}")
+    print("--------------------------------------------------------------------------------")
+
+    if not procs:
+        print("  (No active local model processes detected)")
+    else:
+        for p in procs:
+            print(f"  🤖 [{p['pid']}] {p['name']}  (Model: {p['model']})")
+            print(f"     • Physical RAM (RSS):   {p['rss_mb']:,} MB  (Peak HWM: {p['peak_mb']:,} MB)")
+            print(f"     • Breakdown:            Anonymous: {p['anon_mb']:,} MB | mmap File: {p['file_mb']:,} MB | Swap: {p['swap_mb']:,} MB")
+            print(f"     • Virtual Memory Size:  {p['vms_mb']:,} MB")
+            print(f"     • Command:              {p['cmd']}")
+            print()
+
+    print("================================================================================")
+
+# ------------------------------------------------------------------------------
+# Live Watch Monitor Mode
+# ------------------------------------------------------------------------------
+def run_watch(interval_sec=1.0, log_file=None):
+    print("Starting Aura Pleco live memory monitor... Press Ctrl+C to stop.")
+    csv_writer = None
+    f_log = None
+
+    if log_file:
+        is_new = not os.path.exists(log_file)
+        f_log = open(log_file, "a", buffering=1)
+        if is_new:
+            f_log.write("timestamp,sys_total_mb,sys_avail_mb,sys_used_mb,sys_load_pct,model_pid,model_name,model_rss_mb,model_peak_mb,model_anon_mb,model_file_mb\n")
+
+    initial_mem = get_system_memory()
+    prev_avail = initial_mem["avail_mb"]
+    tick = 0
+
+    try:
+        while True:
+            tick += 1
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sys_mem = get_system_memory()
+            procs = find_model_processes()
+
+            delta = sys_mem["avail_mb"] - prev_avail
+            delta_str = f"+{delta} MB" if delta > 0 else (f"{delta} MB" if delta < 0 else "0 MB")
+            prev_avail = sys_mem["avail_mb"]
+
+            # Log to CSV if enabled
+            if f_log:
+                if procs:
+                    for p in procs:
+                        f_log.write(f"{now_str},{sys_mem['total_mb']},{sys_mem['avail_mb']},{sys_mem['used_mb']},{sys_mem['load_pct']},{p['pid']},{p['name']},{p['rss_mb']},{p['peak_mb']},{p['anon_mb']},{p['file_mb']}\n")
+                else:
+                    f_log.write(f"{now_str},{sys_mem['total_mb']},{sys_mem['avail_mb']},{sys_mem['used_mb']},{sys_mem['load_pct']},,,,,\n")
+
+            # Render Console UI
+            os.system("clear 2>/dev/null || true")
+            bar_width = 32
+            filled = int((sys_mem["load_pct"] / 100.0) * bar_width)
+            bar = "=" * filled + " " * (bar_width - filled)
+
+            print("================================================================================")
+            print("        🐟 AURA PLECO — REAL-TIME LOCAL AI MEMORY MONITOR                       ")
+            print("================================================================================")
+            print(f"  Time:        {now_str}  (Tick: #{tick})")
+            print(f"  Memory Load: [{bar}] {sys_mem['load_pct']}%")
+            print(f"  System RAM:  {sys_mem['used_mb']:,} MB Used / {sys_mem['total_mb']:,} MB Total ({sys_mem['avail_mb']:,} MB Available, Delta: {delta_str})")
+            print(f"  Page Cache:  {sys_mem['cached_mb']:,} MB  | Dirty: {sys_mem['dirty_mb']:,} MB | Swap Used: {sys_mem['swap_used_mb']:,} MB")
+            print("--------------------------------------------------------------------------------")
+            print("  Active AI Model Processes:")
+
+            if not procs:
+                print("  (Waiting for local model process...)")
+            else:
+                for p in procs:
+                    print(f"  🤖 [{p['pid']}] {p['name']:<14} | RSS: {p['rss_mb']:>5} MB (Peak: {p['peak_mb']:>5} MB) | Anon: {p['anon_mb']:>4} MB | Mmap: {p['file_mb']:>5} MB | {p['model']}")
+
+            print("--------------------------------------------------------------------------------")
+            if log_file:
+                print(f"  Logging to: {log_file}")
+            print("  Press Ctrl+C to exit.")
+
+            time.sleep(interval_sec)
+    except KeyboardInterrupt:
+        print("\nStopped memory monitor.")
+    finally:
+        if f_log:
+            f_log.close()
+
+# ------------------------------------------------------------------------------
+# Test Inference Dynamics Mode
+# ------------------------------------------------------------------------------
+def test_inference_lifecycle(prompt="Explain what a Pleco fish is in 2 concise sentences.", max_tokens=64):
+    print("================================================================================")
+    print("        🔬 AURA PLECO — LOCAL AI MODEL MEMORY LIFECYCLE EXPERIMENT             ")
+    print("================================================================================")
+    print(f"  Prompt: \"{prompt}\"")
+    print(f"  Max Tokens: {max_tokens}")
+    print("--------------------------------------------------------------------------------")
+
+    # Step 1: Baseline
+    procs_before = find_model_processes()
+    sys_before = get_system_memory()
+
+    target_pid = None
+    target_name = "local-model"
+    target_rss_before = 0
+    if procs_before:
+        target_pid = procs_before[0]["pid"]
+        target_name = procs_before[0]["name"]
+        target_rss_before = procs_before[0]["rss_mb"]
+
+    print(f"[*] STEP 1: Baseline Memory Snapshot Captured")
+    print(f"    • System Available RAM: {sys_before['avail_mb']:,} MB (Load: {sys_before['load_pct']}%)")
+    if target_pid:
+        print(f"    • Target Process [{target_pid}] ({target_name}): {target_rss_before:,} MB RSS")
+    print()
+
+    # Step 2: Trigger Inference & track peak
+    print(f"[*] STEP 2: Dispatching inference to http://127.0.0.1:1234/v1/chat/completions...")
+    url = "http://127.0.0.1:1234/v1/chat/completions"
+    payload = json.dumps({
+        "model": "lfm3-1.7b-aura-grounded",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": 0.7
+    }).encode("utf-8")
+
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    t0 = time.time()
+    resp_text = ""
+
+    peak_rss = target_rss_before
+    peak_sys_used = sys_before["used_mb"]
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            elapsed = time.time() - t0
+            choices = data.get("choices", [])
+            if choices:
+                msg = choices[0].get("message", {})
+                resp_text = msg.get("content") or msg.get("reasoning_content", "")
+            usage = data.get("usage", {})
+            tokens_generated = usage.get("completion_tokens", 0)
+    except Exception as e:
+        print(f"[!] Error sending inference request: {e}")
+        return
+
+    # Step 3: Immediate post-inference check
+    procs_after = find_model_processes()
+    sys_after = get_system_memory()
+
+    target_rss_after = target_rss_before
+    if procs_after and target_pid:
+        for p in procs_after:
+            if p["pid"] == target_pid:
+                target_rss_after = p["rss_mb"]
+                break
+
+    print(f"    • Inference Completed in {elapsed:.2f}s ({tokens_generated} tokens, {tokens_generated/elapsed:.1f} t/s)")
+    if resp_text:
+        print(f"    • Model Response preview: \"{resp_text[:100]}...\"")
+    print(f"    • Post-Inference Model RSS: {target_rss_after:,} MB (Δ: +{target_rss_after - target_rss_before} MB)")
+    print()
+
+    # Step 4: Run Pleco ram-heal / compaction
+    print(f"[*] STEP 3: Executing Aura Pleco Memory Compaction / Clean...")
+    if os.path.exists("/home/dusan/.local/bin/aura-pleco"):
+        os.system("/home/dusan/.local/bin/aura-pleco --heal >/dev/null 2>&1")
+    time.sleep(1)
+
+    procs_cleaned = find_model_processes()
+    sys_cleaned = get_system_memory()
+
+    target_rss_cleaned = target_rss_after
+    if procs_cleaned and target_pid:
+        for p in procs_cleaned:
+            if p["pid"] == target_pid:
+                target_rss_cleaned = p["rss_mb"]
+                break
+
+    sys_recovered = sys_cleaned["avail_mb"] - sys_after["avail_mb"]
+
+    # Step 5: Summary Table
+    print("--------------------------------------------------------------------------------")
+    print("                 📊 MEMORY LIFECYCLE EXPERIMENT RESULTS                        ")
+    print("--------------------------------------------------------------------------------")
+    print(f"  Metric                      | Baseline     | Post-Inference | Post-Pleco Clean")
+    print(f"  ----------------------------+--------------+----------------+-----------------")
+    print(f"  System Available RAM        | {sys_before['avail_mb']:>7} MB  | {sys_after['avail_mb']:>10} MB  | {sys_cleaned['avail_mb']:>11} MB")
+    print(f"  System Memory Load          | {sys_before['load_pct']:>7}%   | {sys_after['load_pct']:>10}%   | {sys_cleaned['load_pct']:>11}%")
+    if target_pid:
+        print(f"  Model Process RSS (Physical)| {target_rss_before:>7} MB  | {target_rss_after:>10} MB  | {target_rss_cleaned:>11} MB")
+    print(f"  Kernel Page Cache           | {sys_before['cached_mb']:>7} MB  | {sys_after['cached_mb']:>10} MB  | {sys_cleaned['cached_mb']:>11} MB")
+    print("--------------------------------------------------------------------------------")
+    print(f"  [+] RAM Headroom Restored by Pleco: {sys_recovered:+} MB")
+    print("================================================================================")
+
+# ------------------------------------------------------------------------------
+# Main Entry Point
+# ------------------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(description="Aura Pleco AI Model Memory Logger & Profiler")
+    parser.add_argument("--snapshot", action="store_true", help="Print single instant memory snapshot of system & AI models")
+    parser.add_argument("--watch", "-w", action="store_true", help="Live terminal monitor updating every N seconds")
+    parser.add_argument("--interval", "-i", type=float, default=1.0, help="Watch update interval in seconds (default: 1.0)")
+    parser.add_argument("--log", "-l", type=str, default=None, help="Log memory metrics to specified CSV file")
+    parser.add_argument("--test", "-t", action="store_true", help="Run full inference lifecycle test (baseline -> inference -> compaction)")
+    parser.add_argument("--prompt", type=str, default="Explain what a Pleco fish is in 2 concise sentences.", help="Prompt for --test")
+    parser.add_argument("--max-tokens", type=int, default=64, help="Max tokens for --test")
+
+    args = parser.parse_args()
+
+    if args.test:
+        test_inference_lifecycle(prompt=args.prompt, max_tokens=args.max_tokens)
+    elif args.watch or args.log:
+        run_watch(interval_sec=args.interval, log_file=args.log)
+    else:
+        print_snapshot()
+
+if __name__ == "__main__":
+    main()

@@ -35,6 +35,12 @@ aura-pleco --status
 # Launch live interactive ASCII fish tank in terminal
 aura-pleco --stream
 
+# Real-time AI model memory logger & profiler
+aura-pleco-memlog --snapshot                 # Instant breakdown of model RSS & system memory
+aura-pleco-memlog --watch                    # Live terminal dashboard updating every second
+aura-pleco-memlog --log memory-audit.csv     # Continuous background/foreground CSV logging
+aura-pleco-memlog --test                     # Run full inference memory test with local model
+
 # Trigger immediate RAM heal and compaction
 aura-pleco --heal
 
