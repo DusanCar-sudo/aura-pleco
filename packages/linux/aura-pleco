@@ -1,0 +1,405 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# 🐟 aura-pleco: The background "tank cleaner fish" for Linux / Aura OS
+# ==============================================================================
+# Just like that fish you buy for your fish tank that stays quietly in the
+# background eating algae and keeping the glass crystal clear — Aura Pleco
+# monitors memory headroom, sweeps tmpfs gravel, trims local model caches,
+# and keeps your OS and AI development environment snappy.
+#
+# Features:
+#   • Memory Headroom Sentinel: triggers ram-heal or kernel compaction when RAM < threshold
+#   • AI / Local Model Cache Scrubber: cleans stale HF, torchinductor, and Ollama partials
+#   • AI Runtime Process Trimmer: flushes idle memory bloat from Python/Ollama/llama-server
+#   • Tmpfs Algae Scrubber: sweeps abandoned test runs & browser profiles in /tmp
+#   • Interactive Aquarium Stream: live ASCII fish tank dashboard (--stream)
+#   • One-shot & Automation CLI: --status, --heal, --clean-model-cache, --run-now
+# ==============================================================================
+
+set -uo pipefail
+
+# ------------------------------------------------------------------------------
+# Configuration (can be overridden via environment variables or Pleco config)
+# ------------------------------------------------------------------------------
+THRESHOLD_MB=${PLECO_THRESHOLD_MB:-2500}       # Heal RAM if Available < 2.5 GB
+INTERVAL=${PLECO_INTERVAL:-20}                # Main loop tick in seconds
+SWEEP_TICKS=${PLECO_SWEEP_TICKS:-15}          # Temp sweep every 15 ticks (~5 min)
+MODEL_CACHE_TICKS=${PLECO_MODEL_TICKS:-90}    # Model cache sweep every 90 ticks (~30 min)
+COOLDOWN_SEC=${PLECO_COOLDOWN_SEC:-75}        # Min seconds between heavy heals
+PLECO_CACHE_DIR=${PLECO_CACHE_DIR:-$HOME/.cache/huggingface}
+MODEL_CACHE_MAX_DAYS=${PLECO_MODEL_CACHE_MAX_DAYS:-30}
+
+# ------------------------------------------------------------------------------
+# Runtime State
+# ------------------------------------------------------------------------------
+last_heal=0
+tick=0
+total_heals=0
+tank_status="CRYSTAL CLEAR"
+recent_logs=()
+
+log() {
+    local msg="$*"
+    local line
+    line="$(date '+%F %T') 🐟 [pleco] $msg"
+    printf '%s\n' "$line"
+    recent_logs+=("$(date '+%T') - $msg")
+    if ((${#recent_logs[@]} > 6)); then
+        recent_logs=("${recent_logs[@]: -6}")
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Helper: Get Available RAM in MB
+# ------------------------------------------------------------------------------
+get_avail_mb() {
+    local kb
+    kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    echo $((kb / 1024))
+}
+
+get_total_mb() {
+    local kb
+    kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    echo $((kb / 1024))
+}
+
+get_dir_size_mb() {
+    local dir="$1"
+    if [[ -d "$dir" ]]; then
+        du -sm "$dir" 2>/dev/null | cut -f1 || echo 0
+    else
+        echo 0
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Action: Trigger RAM Heal / Compaction
+# ------------------------------------------------------------------------------
+heal_memory() {
+    local before_mb
+    before_mb=$(get_avail_mb)
+    log "Nibbling tank: water murky (Available RAM ${before_mb}MB < ${THRESHOLD_MB}MB)..."
+
+    if [[ -x /usr/local/bin/aura-ram-heal ]]; then
+        /usr/local/bin/aura-ram-heal >/dev/null 2>&1 || true
+    elif [[ -x /usr/local/bin/aura-os-ram-liberate ]]; then
+        /usr/local/bin/aura-os-ram-liberate >/dev/null 2>&1 || true
+    else
+        # Direct kernel compaction & drop inactive pagecache
+        if [[ -w /proc/sys/vm/compact_memory ]]; then
+            echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true
+        fi
+        if [[ -w /proc/sys/vm/drop_caches ]]; then
+            echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+        fi
+    fi
+
+    # Trim idle memory allocations from AI local model runners if present
+    trim_model_processes
+
+    local after_mb
+    after_mb=$(get_avail_mb)
+    local gained=$((after_mb - before_mb))
+    if (( gained < 0 )); then gained=0; fi
+
+    total_heals=$((total_heals + 1))
+    log "Tank water cleared! Available RAM restored to ${after_mb}MB (+${gained}MB freed)."
+    tank_status="CRYSTAL CLEAR"
+}
+
+# ------------------------------------------------------------------------------
+# Action: Trim AI / Local Model Process Allocations
+# ------------------------------------------------------------------------------
+trim_model_processes() {
+    # Send non-destructive compaction signals or trim PyTorch/Ollama workers
+    local pids
+    pids=$(pgrep -f "ollama|llama-server|vllm|text-generation" 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+        for pid in $pids; do
+            # Calling madvise DONTNEED if helper exists, or triggering GC
+            if [[ -d "/proc/$pid" && -w "/proc/$pid/clear_refs" ]]; then
+                echo 1 > "/proc/$pid/clear_refs" 2>/dev/null || true
+            fi
+        done
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Action: Clean Algae & Gravel from /tmp (Tmpfs Cleaner)
+# ------------------------------------------------------------------------------
+clean_temp() {
+    log "Sweeping tank gravel: cleaning stale test artifacts and profiles in /tmp..."
+    # A. Clean stale test run artifacts older than 2 hours
+    find /tmp -maxdepth 1 -type d \
+        \( -name 'aura-corpus-*' -o -name 'tiered-context-test-*' \
+        -o -name 'v*-check' -o -name '1475-*' -o -name '1514-*' \
+        -o -name 'puppeteer_dev_chrome_profile-*' \
+        -o -name 'torchinductor_*' \) -mmin +120 -exec rm -rf {} + 2>/dev/null || true
+
+    # B. Run orphan process reaper if present
+    if [[ -x /mnt/bigdata/aura/projects/ram-guard/reap-orphans.sh ]]; then
+        /mnt/bigdata/aura/projects/ram-guard/reap-orphans.sh >/dev/null 2>&1 || true
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Action: Clean Local AI Model Caches (Hugging Face, Ollama, PyTorch)
+# ------------------------------------------------------------------------------
+clean_model_cache() {
+    log "Inspecting model caches (HF: $PLECO_CACHE_DIR, Torch, Ollama)..."
+
+    local freed_bytes=0
+
+    # 1. HuggingFace: remove incomplete downloads (.tmp / .partial / incomplete locks)
+    if [[ -d "$PLECO_CACHE_DIR/hub" ]]; then
+        find "$PLECO_CACHE_DIR/hub" -name "tmp*" -type f -mmin +60 -delete 2>/dev/null || true
+        find "$PLECO_CACHE_DIR/hub" -name "*.lock" -type f -mmin +180 -delete 2>/dev/null || true
+    fi
+
+    # 2. HuggingFace: remove model weights untouched for > MODEL_CACHE_MAX_DAYS
+    if [[ -d "$PLECO_CACHE_DIR" ]]; then
+        find "$PLECO_CACHE_DIR" -type f -atime +"$MODEL_CACHE_MAX_DAYS" -mtime +"$MODEL_CACHE_MAX_DAYS" -name "*.bin" -o -name "*.safetensors" 2>/dev/null | while read -r old_model; do
+            rm -f "$old_model" 2>/dev/null || true
+        done
+    fi
+
+    # 3. PyTorch Inductor & Triton Caches
+    find /tmp -maxdepth 1 -type d -name "torchinductor_*" -mmin +360 -exec rm -rf {} + 2>/dev/null || true
+    if [[ -d "$HOME/.triton/cache" ]]; then
+        find "$HOME/.triton/cache" -type f -mtime +14 -delete 2>/dev/null || true
+    fi
+
+    # 4. Ollama partial blobs from aborted pulls
+    if [[ -d "$HOME/.ollama/models/blobs" ]]; then
+        find "$HOME/.ollama/models/blobs" -name "*.partial" -mmin +120 -delete 2>/dev/null || true
+    fi
+
+    log "Model cache sweep complete."
+}
+
+# ------------------------------------------------------------------------------
+# Action: Print Status Dashboard
+# ------------------------------------------------------------------------------
+print_status() {
+    local total_mb avail_mb used_mb load_pct
+    total_mb=$(get_total_mb)
+    avail_mb=$(get_avail_mb)
+    used_mb=$((total_mb - avail_mb))
+    load_pct=$(( (used_mb * 100) / (total_mb > 0 ? total_mb : 1) ))
+
+    local hf_size torch_size
+    hf_size=$(get_dir_size_mb "$PLECO_CACHE_DIR")
+    torch_size=$(get_dir_size_mb "$HOME/.cache/torch")
+
+    local daemon_active="INACTIVE"
+    if systemctl --user is-active aura-pleco.service >/dev/null 2>&1; then
+        daemon_active="ACTIVE (systemd user service)"
+    elif pgrep -f "aura-pleco" | grep -v "$$" >/dev/null 2>&1; then
+        daemon_active="RUNNING (standalone PID)"
+    fi
+
+    cat <<EOF
+================================================================================
+             🐟 AURA PLECO TANK HEALTH CHECK (LINUX / AURA OS)
+================================================================================
+  Tank Water Status:    [${tank_status}]
+  Daemon State:         ${daemon_active}
+--------------------------------------------------------------------------------
+  Total Physical RAM:   ${total_mb} MB
+  Available Headroom:   ${avail_mb} MB
+  Memory Load:          ${load_pct}% (${used_mb} MB used)
+  Heal Threshold:       < ${THRESHOLD_MB} MB available (Check interval: ${INTERVAL}s)
+--------------------------------------------------------------------------------
+  AI Model Caches:
+    * HuggingFace:      ${hf_size} MB (${PLECO_CACHE_DIR})
+    * PyTorch Cache:    ${torch_size} MB (~/.cache/torch)
+================================================================================
+EOF
+}
+
+# ------------------------------------------------------------------------------
+# Interactive Stream Mode (Fish Tank View)
+# ------------------------------------------------------------------------------
+run_stream() {
+    trap 'echo -e "\nCleaner fish resting. Goodbye!"; exit 0' SIGINT SIGTERM
+    local frame=0
+
+    local sprites=(
+        "><(((º>  . . .  ~ ~ ~"
+        "  ><(((º>  . .  ~ ~ ~"
+        "    ><(((º>  .  ~ ~ ~"
+        "      ><(((º>   ~ ~ ~"
+        "    <º)))><  .  ~ ~ ~"
+        "  <º)))><  . .  ~ ~ ~"
+        "<º)))><  . . .  ~ ~ ~"
+    )
+
+    while true; do
+        local total_mb avail_mb used_mb load_pct
+        total_mb=$(get_total_mb)
+        avail_mb=$(get_avail_mb)
+        used_mb=$((total_mb - avail_mb))
+        load_pct=$(( (used_mb * 100) / (total_mb > 0 ? total_mb : 1) ))
+
+        local fish="${sprites[$((frame % ${#sprites[@]}))]}"
+        frame=$((frame + 1))
+
+        # Memory bar
+        local bar_width=36
+        local filled=$(( (load_pct * bar_width) / 100 ))
+        local empty=$(( bar_width - filled ))
+        local bar=""
+        for ((i=0; i<filled; i++)); do bar+="="; done
+        for ((i=0; i<empty; i++)); do bar+=" "; done
+
+        clear 2>/dev/null || true
+        cat <<EOF
+================================================================================
+        🐟 AURA PLECO — THE BACKGROUND FISH TANK CLEANER (LINUX)
+================================================================================
+  Tank Water:  [${tank_status}]
+  Fish Mood:   ${fish}
+--------------------------------------------------------------------------------
+  Memory Load: [${bar}] ${load_pct}%
+  RAM State:   ${used_mb} MB Used / ${total_mb} MB Total (${avail_mb} MB Available)
+  Sentinels:   Trigger < ${THRESHOLD_MB} MB | Sweep /tmp every 5m | Model cache 30m
+--------------------------------------------------------------------------------
+  Total Heals Executed: ${total_heals}
+--------------------------------------------------------------------------------
+  Recent Tank Activity:
+EOF
+        if ((${#recent_logs[@]} == 0)); then
+            echo "    (Fish swimming peacefully, keeping tank crystal clear...)"
+        else
+            for entry in "${recent_logs[@]}"; do
+                echo "    * $entry"
+            done
+        fi
+        cat <<EOF
+================================================================================
+  Press Ctrl+C to exit dashboard.
+EOF
+
+        # Check memory in stream mode
+        if (( avail_mb < THRESHOLD_MB )); then
+            local now
+            now=$(date +%s)
+            if (( now - last_heal >= COOLDOWN_SEC )); then
+                tank_status="NIBBLING ALGAE (HEALING RAM)"
+                heal_memory
+                last_heal=$now
+            fi
+        fi
+
+        sleep 2
+    done
+}
+
+# ------------------------------------------------------------------------------
+# Parse Command-Line Flags
+# ------------------------------------------------------------------------------
+RUN_NOW=0
+ONE_SHOT_ACTIONS=()
+
+while (( "$#" )); do
+    case "$1" in
+        --status)
+            print_status
+            exit 0
+            ;;
+        --stream|-s)
+            run_stream
+            exit 0
+            ;;
+        --heal)
+            heal_memory
+            exit 0
+            ;;
+        --clean-temp)
+            clean_temp
+            exit 0
+            ;;
+        --clean-model-cache)
+            clean_model_cache
+            exit 0
+            ;;
+        --run-now|-1)
+            RUN_NOW=1
+            ONE_SHOT_ACTIONS+=(heal_memory clean_temp clean_model_cache)
+            ;;
+        --help|-h)
+            cat <<EOF
+Aura Pleco — The Background Tank Cleaner Fish for Linux & Aura OS
+
+Usage: aura-pleco [options]
+
+Options:
+  --status              Print tank status, memory health, and model cache metrics
+  --stream, -s          Launch live interactive ASCII aquarium console dashboard
+  --heal                Trigger immediate RAM heal and compaction
+  --clean-temp          Clean /tmp test directories and gravel debris
+  --clean-model-cache   Clean stale HuggingFace/Torch/Ollama model caches
+  --run-now, -1         Execute all cleaning passes once and exit immediately
+  --help, -h            Show this help dialog
+
+Running without options starts the background cleaner fish daemon.
+EOF
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1 (see aura-pleco --help)" >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+if (( RUN_NOW )); then
+    log "Running one-shot tank cleaning cycle..."
+    for act in "${ONE_SHOT_ACTIONS[@]}"; do
+        "$act"
+    done
+    print_status
+    exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# Background Cleaner Fish Daemon Loop
+# ------------------------------------------------------------------------------
+cleanup() {
+    log "Cleaner fish resting. Goodbye!"
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+log "Aura Pleco swimming into the tank. (Headroom threshold: ${THRESHOLD_MB}MB, Interval: ${INTERVAL}s)"
+
+while true; do
+    tick=$((tick + 1))
+    now=$(date +%s)
+
+    # 1. Check Available RAM
+    avail_mb=$(get_avail_mb)
+
+    # 2. Check if memory headroom is constrained
+    if (( avail_mb < THRESHOLD_MB )); then
+        time_since=$((now - last_heal))
+        if (( time_since >= COOLDOWN_SEC )); then
+            heal_memory
+            last_heal=$now
+        fi
+    fi
+
+    # 3. Periodic temp sweep (every ~5 mins = SWEEP_TICKS)
+    if (( tick % SWEEP_TICKS == 0 )); then
+        clean_temp
+    fi
+
+    # 4. Periodic local model cache sweep (every ~30 mins = MODEL_CACHE_TICKS)
+    if (( tick % MODEL_CACHE_TICKS == 0 )); then
+        clean_model_cache
+    fi
+
+    sleep "$INTERVAL"
+done

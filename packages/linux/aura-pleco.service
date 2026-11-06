@@ -1,0 +1,15 @@
+[Unit]
+Description=Aura Pleco — Background System Cleaner & RAM Sentinel
+Documentation=https://github.com/DusanCar-sudo/aura-pleco
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/aura-pleco
+Restart=always
+RestartSec=10
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

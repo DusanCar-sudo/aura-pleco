@@ -1,0 +1,17 @@
+{
+  "checkIntervalSeconds": 20,
+  "memoryThresholdPercent": 80,
+  "minAvailableRamMb": 2500,
+  "cooldownSeconds": 75,
+  "trimWorkingSets": true,
+  "purgeStandbyList": true,
+  "optimizeTimerResolution": true,
+  "cleanTempFiles": true,
+  "tempFileMaxAgeHours": 2,
+  "cleanOrphanProcesses": true,
+  "cleanModelCache": true,
+  "modelCacheMaxAgeDays": 30,
+  "cleanTorchInductorCache": true,
+  "logToFile": true,
+  "logFilePath": "pleco.log"
+}

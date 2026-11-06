@@ -1,0 +1,16 @@
+# Build outputs
+packages/windows/pleco.exe
+*.exe
+*.dll
+*.pdb
+*.obj
+
+# Logs
+*.log
+packages/windows/pleco.log
+
+# OS & Editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*~
