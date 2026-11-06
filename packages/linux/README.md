@@ -57,6 +57,22 @@ journalctl --user -u aura-pleco -f
 
 ---
 
+### Bundle with the Aura Grounded model
+
+`--with-model` also downloads the fine-tuned **LFM3-1.7B-aura-grounded**
+GGUF (1.8 GB, Apache-2.0, from Hugging Face) — a 1.7B local model trained
+to answer only what its sources support and refuse what they don't — and
+registers it with Ollama as `aura-grounded` if Ollama is installed
+(otherwise it prints the GGUF path for LM Studio):
+
+```bash
+./install.sh --with-model
+ollama run aura-grounded
+```
+
+The cleaner keeps enough RAM headroom for the model; the model gives the
+freed memory something useful to hold.
+
 ### Uninstall
 
 ```bash

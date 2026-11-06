@@ -103,6 +103,8 @@ aura-pleco/
 git clone https://github.com/DusanCar-sudo/aura-pleco.git
 cd aura-pleco/packages/linux
 ./install.sh
+# or bundle the fine-tuned LFM3-1.7B-aura-grounded local model (1.8 GB GGUF):
+./install.sh --with-model
 ```
 
 #### Commands
