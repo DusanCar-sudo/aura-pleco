@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aura Pleco — The Background Cleaner Fish for Linux & Windows</title>
+<meta name="description" content="A ~3MB background daemon that keeps RAM, temp storage and local AI model caches crystal clear on Linux and Windows workstations.">
+<style>
+:root{
+  --bg:#0b1410; --panel:#12211a; --ink:#e8f2ec; --dim:#9db8aa;
+  --green:#7fd6a4; --accent:#3ea370; --line:#1e3629; --code:#0d1a13;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:16px/1.65 "Segoe UI",system-ui,-apple-system,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:0 24px}
+header{padding:72px 0 48px;text-align:center;border-bottom:1px solid var(--line)}
+h1{font-size:3rem;letter-spacing:-1px}
+h1 .fish{color:var(--green)}
+.tag{color:var(--dim);font-size:1.25rem;margin:16px auto 28px;max-width:640px}
+.badges span{display:inline-block;border:1px solid var(--line);background:var(--panel);color:var(--green);border-radius:999px;padding:4px 14px;margin:4px;font-size:.85rem}
+.cta{margin-top:28px}
+.btn{display:inline-block;background:var(--accent);color:#06120c;font-weight:700;text-decoration:none;border-radius:8px;padding:12px 26px;margin:6px}
+.btn.ghost{background:transparent;color:var(--green);border:1px solid var(--accent)}
+section{padding:56px 0;border-bottom:1px solid var(--line)}
+h2{font-size:1.7rem;margin-bottom:22px;color:var(--green)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px}
+.card b{color:var(--green);display:block;margin-bottom:8px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:16px;overflow-x:auto;font:13px/1.6 ui-monospace,Consolas,monospace;color:#c9e5d5;margin:12px 0}
+pre .c{color:#5f7d6d}
+table{width:100%;border-collapse:collapse;font-size:.95rem}
+td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{color:var(--green);white-space:nowrap;font-family:ui-monospace,monospace}
+footer{padding:40px 0;color:var(--dim);text-align:center;font-size:.9rem}
+a{color:var(--green)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1><span class="fish">🐟</span> Aura Pleco</h1>
+    <p class="tag">The background <b>cleaner fish</b> daemon for Linux &amp; Windows workstations — keeping memory, temp storage and local AI model caches crystal clear.</p>
+    <div class="badges">
+      <span>~3 MB RAM footprint</span><span>Linux · Aura OS · Windows 10/11</span><span>Apache-2.0</span><span>LLM cache aware</span>
+    </div>
+    <div class="cta">
+      <a class="btn" href="https://github.com/DusanCar-sudo/aura-pleco">Get it on GitHub</a>
+      <a class="btn ghost" href="#install">1-click install</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>Why your workstation tanks</h2>
+    <div class="grid">
+      <div class="card"><b>Inactive apps hoard RAM</b>Electron utilities, browsers and IDEs hold physical memory they no longer use — your free RAM quietly evaporates.</div>
+      <div class="card"><b>AI dev leaves gigabytes behind</b>Stale Hugging Face weights, aborted Ollama pulls, PyTorch/Triton compile caches and <code>*.partial</code> blobs pile up in silence.</div>
+      <div class="card"><b>Windows Standby clogs</b>The Standby List never flushes itself; "available" memory stays locked in cache.</div>
+      <div class="card"><b>Temp junk accumulates</b>Test runs, playwright profiles and tmpfs litter fill storage between reboots.</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What Pleco does — every 20 seconds</h2>
+    <table>
+      <tr><td>RAM Sentinel</td><td>Watches memory headroom; when it drops below threshold it compacts pages, drops inactive caches and flushes Standby memory.</td></tr>
+      <tr><td>Model Cache Scrubber</td><td>Cleans stale Hugging Face / Ollama / PyTorch Inductor / Triton artifacts — only incomplete and abandoned ones, never your models.</td></tr>
+      <tr><td>Working Set Trimmer</td><td>Asks the OS to release unreferenced pages from background processes — nothing gets killed.</td></tr>
+      <tr><td>Gravel Cleaner</td><td>Sweeps stale test dirs (playwright profiles, tmpfs litter) older than 2 hours.</td></tr>
+      <tr><td>Tank Log</td><td>Everything it frees is logged — you always see exactly what the fish ate.</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>1-click install</h2>
+    <pre><span class="c"># 🐧 Linux / Aura OS</span>
+git clone https://github.com/DusanCar-sudo/aura-pleco.git
+cd aura-pleco/packages/linux
+./install.sh          <span class="c"># or: ./install.sh --with-model  (bundles the local 1.8 GB LFM3-1.7B model)</span>
+
+<span class="c"># 🪟 Windows 10/11 — no Visual Studio needed (uses the built-in csc.exe)</span>
+<span class="c"># open PowerShell as Administrator, from packages\windows:</span>
+install.bat           <span class="c"># compiles in ~2s, registers a boot task, starts swimming</span></pre>
+    <h2>Commands</h2>
+    <table>
+      <tr><td>aura-pleco --status</td><td>Tank health, RAM headroom and model-cache sizes.</td></tr>
+      <tr><td>aura-pleco --stream</td><td>The live ASCII aquarium, feeding on your real memory stats.</td></tr>
+      <tr><td>pleco.exe --status / --stream</td><td>Same on Windows.</td></tr>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Part of the <a href="https://github.com/DusanCar-sudo">Aura ecosystem</a> · Apache-2.0 · built to solve anybody's tank problem 🐟</p>
+  </div>
+</footer>
+
+</body>
+</html>
