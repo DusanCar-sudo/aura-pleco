@@ -13,5 +13,6 @@
   "modelCacheMaxAgeDays": 30,
   "cleanTorchInductorCache": true,
   "logToFile": true,
-  "logFilePath": "pleco.log"
+  "logFilePath": "pleco.log",
+  "commitThresholdPercent": 90
 }

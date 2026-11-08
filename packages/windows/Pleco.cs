@@ -81,6 +81,7 @@ namespace Pleco
         {
             public int CheckIntervalSeconds = 20;
             public int MemoryThresholdPercent = 80;
+            public int CommitThresholdPercent = 90; // v1.1.0: heal on commit-charge thrash (mirrors Linux swap sentinel)
             public int MinAvailableRamMb = 2500;
             public int CooldownSeconds = 75;
             public bool TrimWorkingSets = true;
@@ -187,7 +188,11 @@ namespace Pleco
                 ulong availMb = mem.ullAvailPhys / (1024 * 1024);
                 uint memLoad = mem.dwMemoryLoad;
 
-                bool needHeal = (memLoad >= (uint)_config.MemoryThresholdPercent) || (availMb < (ulong)_config.MinAvailableRamMb);
+                // v1.1.0: commit-charge pressure — freezes come from commit thrash even before physical RAM hits zero
+                int commitPct = 0;
+                if (mem.ullTotalPageFile > 0)
+                    commitPct = (int)((mem.ullTotalPageFile - mem.ullAvailPageFile) * 100 / mem.ullTotalPageFile);
+                bool needHeal = (memLoad >= (uint)_config.MemoryThresholdPercent) || (availMb < (ulong)_config.MinAvailableRamMb) || (commitPct >= _config.CommitThresholdPercent);
 
                 if (needHeal)
                 {
@@ -685,6 +690,8 @@ namespace Pleco
                         _config.CheckIntervalSeconds = ExtractInt(json, "\"checkIntervalSeconds\":", _config.CheckIntervalSeconds);
                     if (json.Contains("\"memoryThresholdPercent\":"))
                         _config.MemoryThresholdPercent = ExtractInt(json, "\"memoryThresholdPercent\":", _config.MemoryThresholdPercent);
+                    if (json.Contains("\"commitThresholdPercent\":"))
+                        _config.CommitThresholdPercent = ExtractInt(json, "\"commitThresholdPercent\":", _config.CommitThresholdPercent);
                     if (json.Contains("\"minAvailableRamMb\":"))
                         _config.MinAvailableRamMb = ExtractInt(json, "\"minAvailableRamMb\":", _config.MinAvailableRamMb);
                     if (json.Contains("\"cooldownSeconds\":"))

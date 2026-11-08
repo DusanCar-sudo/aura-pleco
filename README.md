@@ -1,5 +1,7 @@
 # 🐟 Aura Pleco
 
+**v1.1.0** adds the Swap-Thrash Sentinel (Linux): Pleco now also heals when zram/swap usage hits 90% — freezing happens during swap thrash, before available RAM reaches zero.
+
 > **The Background "Cleaner Fish" Daemon for Linux & Windows Workstations.**  
 > *Keeping memory, temporary storage, and local AI model caches crystal clear, lean, and snappy.*
 

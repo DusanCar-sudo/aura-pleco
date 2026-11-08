@@ -9,6 +9,8 @@
 #
 # Features:
 #   • Memory Headroom Sentinel: triggers ram-heal or kernel compaction when RAM < threshold
+#   • Swap-Thrash Sentinel (v1.1.0): also heals when zram/swap usage >= 90% — catches the
+#     thrash phase that freezes the desktop before available RAM hits zero
 #   • AI / Local Model Cache Scrubber: cleans stale HF, torchinductor, and Ollama partials
 #   • AI Runtime Process Trimmer: flushes idle memory bloat from Python/Ollama/llama-server
 #   • Tmpfs Algae Scrubber: sweeps abandoned test runs & browser profiles in /tmp
@@ -76,6 +78,19 @@ get_dir_size_mb() {
 # ------------------------------------------------------------------------------
 # Action: Trigger RAM Heal / Compaction
 # ------------------------------------------------------------------------------
+
+get_swap_pressure() {
+    # % of swap (zram + file) in use — the real freeze signal
+    local total=0 used=0 line t u
+    while read -r line; do
+        set -- $line
+        [[ "$1" == /dev/zram0 || "$1" == /swapfile ]] || continue
+        t=${3:-0}; u=${4:-0}
+        total=$((total + t)); used=$((used + u))
+    done < <(grep -v '^Filename' /proc/swaps)
+    (( total > 0 )) && echo $(( used * 100 / total )) || echo 0
+}
+
 heal_memory() {
     local before_mb
     before_mb=$(get_avail_mb)
@@ -282,7 +297,9 @@ EOF
 EOF
 
         # Check memory in stream mode
-        if (( avail_mb < THRESHOLD_MB )); then
+        local swap_pct
+        swap_pct=$(get_swap_pressure)
+        if (( avail_mb < THRESHOLD_MB || swap_pct >= 90 )); then
             local now
             now=$(date +%s)
             if (( now - last_heal >= COOLDOWN_SEC )); then

@@ -1,0 +1,11 @@
+{
+  "name": "aura-pleco",
+  "version": "1.1.0",
+  "description": "The background cleaner-fish daemon for Linux & Windows workstations — keeps RAM, temp storage and local AI model caches crystal clear",
+  "license": "Apache-2.0",
+  "repository": "github:DusanCar-sudo/aura-pleco",
+  "homepage": "https://github.com/DusanCar-sudo/aura-pleco#readme",
+  "bin": { "aura-pleco": "bin/aura-pleco.js" },
+  "files": ["bin/", "packages/"],
+  "engines": { "node": ">=14" }
+}

@@ -1,5 +1,7 @@
 # 🐟 Pleco for Windows — The Background Tank Cleaner Fish
 
+**v1.1.0** adds the Commit-Pressure Sentinel: Pleco now also heals when system commit charge hits 90% (`commitThresholdPercent` in PlecoConfig.json).
+
 > *"Just like that fish you buy for your fish tank that stays quietly in the background eating algae and keeping the glass crystal clear — Pleco keeps your Windows memory, temporary storage, and local AI model caches clean, lean, and snappy."*
 
 ---
